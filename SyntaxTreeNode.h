@@ -1,11 +1,14 @@
 #ifndef DIFFERENTIATOR_SYNTAX_TREE_NODE_H
 #define DIFFERENTIATOR_SYNTAX_TREE_NODE_H
 
+#include <memory>
 #include <string>
 #include <exception>
 #include <memory>
 #include <vector>
 #include <sstream>
+#include "Context.h"
+
 
 class ParsingException : public std::exception
 {
@@ -13,10 +16,10 @@ public:
     std::string error;
     std::string message;
 
-    ParsingException(std::string error): error(error), message(error) {}
+    explicit ParsingException(std::string error): error(error), message(error) {}
 
-    ParsingException(std::string error, std::string file, int lineN, int charN): error(error) {
-        std::unique_ptr<char[]> buf( new char[300] );
+    ParsingException(std::string error, const std::string &file, int lineN, int charN): error(error) {
+        std::shared_ptr<char[]> buf( new char[300] );
         int size = sprintf(buf.get(), "Error parsing file '%s' L%d C%d: %s",
                            file.c_str(), lineN, charN, error.c_str());
         message = std::string(buf.get(), buf.get() + size);
@@ -32,6 +35,8 @@ struct SyntaxTreeNode {
 public:
     virtual std::string to_string() = 0;
 
+    virtual SyntaxTreeNode *copy() = 0;
+
     static void indent(std::string& value) {
         size_t pos = 0;
         while (pos != std::string::npos) {
@@ -42,8 +47,6 @@ public:
     }
 };
 
-struct ParentTreeNode: virtual SyntaxTreeNode {};
-
 struct Expression: virtual SyntaxTreeNode {
     enum ExpressionType {
         UNARY_OPERATOR,
@@ -51,191 +54,43 @@ struct Expression: virtual SyntaxTreeNode {
         ELEMENTARY_VALUE,
         VARIABLE,
         VARIABLE_DECLARATION,
-        FUNCTION_CALL,
+        CALL,
+        FUNCTION_REFERENCE,
         OTHER
     };
 
     virtual ExpressionType getType() = 0;
-};
 
-struct Type: virtual SyntaxTreeNode {
-    std::string name;
-    std::vector<std::string> generics;
-
-    Type() = default;
-    explicit Type(std::string name): name(name) {}
-
-    virtual std::string to_string() {
-        std::string result = name;
-        if (!generics.empty()) {
-            result += '<';
-            for (int i = 0; i < generics.size(); ++i) {
-                if (i != 0) result += ", ";
-                result += generics[i];
-            }
-            result += '>';
-        }
-        return result;
-    };
+    Expression *copy() override = 0;
 };
 
 struct Variable: virtual Expression {
     Type type;
     std::string name;
+    bool declaration;
 
-    Variable() = default;
-    Variable(Type type, std::string name): type(type), name(name) {};
+    Variable() = delete;
+    Variable(Type type, std::string name, bool declaration=false):
+            type(std::move(type)), name(std::move(name)), declaration(declaration) {};
 
-    virtual ExpressionType getType() override {
-        return Expression::ExpressionType::VARIABLE;
+    ExpressionType getType() override {
+        return declaration ? VARIABLE_DECLARATION : VARIABLE;
     }
 
-    virtual std::string to_string() override {
+    std::string to_string() override {
+        if (declaration) {
+            return type.to_string() + " " + name;
+        }
         return name;
     }
-};
 
-struct FileStatement: virtual SyntaxTreeNode {
-    enum FileStatementType {
-        FUNCTION_DECLARATION,
-        FUNCTION,
-        INCLUDE,
-        OTHER
-    };
-
-    virtual FileStatementType getType() = 0;
-};
-
-struct FunctionDeclaration: virtual FileStatement {
-    std::string name;
-    Type returnType;
-    std::vector<Variable*> params;
-
-    FunctionDeclaration() = default;
-    FunctionDeclaration(std::string name): name(name){};
-    FunctionDeclaration(std::string name, Type returnType): name(name), returnType(returnType) {}
-    FunctionDeclaration(std::string name, int nParams): name(name) {
-        for (int i = 0; i < nParams; ++i) {
-            params.push_back(new Variable(Type(""), "param_" + std::to_string(i)));
-        }
-    }
-
-    virtual FileStatementType getType() override {
-        return FUNCTION_DECLARATION;
-    }
-
-    std::string to_string(bool semicolon) {
-        std::string result;
-        result += returnType.to_string() + ' ' + name + '(';
-        for (int i = 0; i < params.size(); ++i) {
-            if (i != 0) result += ", ";
-            result += params[i]->type.to_string() + ' ' + params[i]->to_string();
-        }
-        result += ")";
-        if (semicolon) result += ";";
-        return result;
-    }
-
-    virtual std::string to_string() override {
-        return to_string(true);
-    }
-};
-
-struct Context {
-public:
-    std::unordered_map<std::string, Variable*> definedVariables;
-    std::unordered_map<std::string, Type*> definedTypes;
-    std::unordered_map<std::string, FunctionDeclaration*> definedFunctions;
-    Context* parent = nullptr;
-
-    void addVariable(Variable *var) {
-        definedVariables[var->name] = var;
-    }
-
-    void addType(Type *type) {
-        definedTypes[type->name] = type;
-    }
-
-    void addFunction(FunctionDeclaration *function) {
-        definedFunctions[function->name] = function;
-    }
-
-    bool isVariablePresent(std::string& name) {
-        return definedVariables.count(name) ||
-            (parent != nullptr && parent->isVariablePresent(name));
-    }
-
-    bool isTypePresent(std::string& name) {
-        return definedTypes.count(name) ||
-            (parent != nullptr && parent->isTypePresent(name));
-    }
-
-    bool isFunctionPresent(std::string& name) {
-        return definedFunctions.count(name) ||
-            (parent != nullptr && parent->isFunctionPresent(name));
-    }
-
-    Variable* getVariable(std::string& name) {
-        return definedVariables.count(name) > 0 ? definedVariables[name] :
-            (parent == nullptr ? nullptr : parent->getVariable(name));
-    }
-
-    Type* getType(std::string& name) {
-        return definedTypes.count(name) > 0 ? definedTypes[name] :
-            (parent == nullptr ? nullptr : parent->getType(name));
-    }
-
-    FunctionDeclaration* getFunction(std::string &name) {
-        return definedFunctions.count(name) > 0 ? definedFunctions[name] :
-            (parent == nullptr ? nullptr : parent->getFunction(name));
-    }
-};
-
-struct FunctionCall: virtual Expression {
-    FunctionDeclaration *declaration;
-    std::vector<Expression *> args;
-
-    FunctionCall() = default;
-    FunctionCall(FunctionDeclaration *declaration): declaration(declaration) {};
-    FunctionCall(FunctionDeclaration *declaration, Expression *arg): declaration(declaration) {
-        args.push_back(arg);
-    }
-    FunctionCall(FunctionDeclaration *declaration, Expression *arg1, Expression *arg2): FunctionCall(declaration, arg1) {
-        args.push_back(arg2);
-    }
-
-    virtual ExpressionType getType() override {
-        return ExpressionType::FUNCTION_CALL;
-    }
-
-    virtual std::string to_string() {
-        std::string result = declaration->name + '(';
-        for (int i = 0; i < args.size(); ++i) {
-            if (i != 0) result += ", ";
-            result += args[i]->to_string();
-        }
-        result += ')';
-        return result;
-    }
-};
-
-struct VariableDeclaration: virtual Expression {
-    Variable* var;
-
-    VariableDeclaration() = default;
-    explicit VariableDeclaration(Variable *var): var(var) {};
-
-    virtual ExpressionType getType() override {
-        return Expression::ExpressionType::VARIABLE_DECLARATION;
-    }
-
-    virtual std::string to_string() {
-        return var->type.to_string() + " " + var->to_string();
+    Variable *copy() override {
+        return new Variable(type, name);
     }
 };
 
 struct ElementaryValue: virtual Expression {
-    virtual ExpressionType getType() override {
+    ExpressionType getType() override {
         return Expression::ExpressionType::ELEMENTARY_VALUE;
     }
 };
@@ -243,14 +98,18 @@ struct ElementaryValue: virtual Expression {
 struct Number: virtual ElementaryValue {
     double value;
 
-    Number() = default;
-    explicit Number(std::string value): value(std::atof(value.c_str())){};
+    explicit Number(double value): value(value) {};
+    explicit Number(const std::string value): value(std::atof(value.c_str())){};
 
-    virtual std::string to_string() {
+    std::string to_string() override {
         std::ostringstream output;
         output << value;
         return output.str();
     };
+
+    Number* copy() override {
+        return new Number(value);
+    }
 };
 
 struct Operator: virtual Expression {
@@ -258,6 +117,58 @@ struct Operator: virtual Expression {
 
     static int comparePrecedence(Operator *op1, Operator *op2) {
         return op1->getOperatorPrecedence() - op2->getOperatorPrecedence();
+    }
+};
+
+struct Call: virtual Expression {
+    FunctionSignature signature;
+    std::vector<std::shared_ptr<Expression>> args;
+
+    explicit Call(FunctionSignature& signature): signature(signature) {};
+    Call(FunctionSignature &signature, std::vector<std::shared_ptr<Expression>> args):
+            signature(signature), args(std::move(args)) {}
+    Call(FunctionSignature &signature, std::shared_ptr<Expression> arg0): signature(signature) {
+        args.push_back(std::move(arg0));
+    }
+    Call(FunctionSignature &signature, std::shared_ptr<Expression> arg0, std::shared_ptr<Expression> arg1):
+            Call(signature, std::move(arg0)) {
+        args.push_back(std::move(arg1));
+    }
+
+    ExpressionType getType() override {
+        return CALL;
+    }
+
+    std::string to_string(bool methodCall) {
+        std::ostringstream result;
+        if (methodCall) {
+            size_t i = signature.name.find_last_of(':');
+            if (i == std::string::npos) { i = 0; }
+            else { ++i; }
+            result << signature.name.substr(i);
+        } else {
+            result << signature.name;
+        }
+
+        result << '(';
+        for (int i = 0; i < args.size(); ++i) {
+            if (i != 0) result << ", ";
+            result << args[i]->to_string();
+        }
+        result << ')';
+        return result.str();
+    }
+
+    std::string to_string() override {
+        return to_string(false);
+    }
+
+    Call *copy() override {
+        std::vector<std::shared_ptr<Expression>> copyArgs;
+        for (auto &arg: args) {
+            copyArgs.push_back(std::shared_ptr<Expression>(arg->copy()));
+        }
+        return new Call(signature, copyArgs);
     }
 };
 
@@ -302,34 +213,48 @@ struct UnaryOperator: virtual Operator {
     }
 
     Operation op;
-    Expression *expr;
+    std::shared_ptr<Expression> expr;
+    bool suffix = false;
 
-    UnaryOperator() = default;
-    UnaryOperator(Operation op, Expression *expr): op(op), expr(expr) {}
-    UnaryOperator(std::string opString, Expression *expr): expr(expr) {
-        op = parseOperation(opString);
+    UnaryOperator() = delete;
+    UnaryOperator(Operation op, std::shared_ptr<Expression> expr): op(op), expr(std::move(expr)) {}
+    UnaryOperator(std::string opString, std::shared_ptr<Expression> expr):
+            UnaryOperator(parseOperation(opString), std::move(expr)) {}
+    UnaryOperator(Operation op, std::shared_ptr<Expression> expr, bool suffix): UnaryOperator(op, std::move(expr)) {
+        if (suffix && op != PLUS_PLUS && op != MINUS_MINUS) {
+            throw ParsingException("The operator '" + operatorToString(op) + "' does not have a suffix form");
+        }
     }
+    UnaryOperator(std::string opString, std::shared_ptr<Expression> expr, bool suffix):
+            UnaryOperator(parseOperation(opString), std::move(expr), suffix) {}
 
-    virtual int getOperatorPrecedence() override {
+    int getOperatorPrecedence() override {
         if (op == BRACES) {
             return 0;
-        } else if (op == PLUS_PLUS || op == MINUS_MINUS) {
+        } else if (suffix && (op == PLUS_PLUS || op == MINUS_MINUS)) {
             return 2;
-        } else if (op == PLUS || op == MINUS || op == NOT) {
+        } else if (op == PLUS_PLUS || op == MINUS_MINUS || op == PLUS || op == MINUS || op == NOT) {
             return 3;
         }
         return 100;
     }
 
-    virtual ExpressionType getType() override {
+    ExpressionType getType() override {
         return Expression::ExpressionType::UNARY_OPERATOR;
     }
 
-    virtual std::string to_string() override {
+    std::string to_string() override {
         if (op == BRACES) {
             return "(" + expr->to_string() + ")";
         }
+        if (suffix) {
+            return expr->to_string() + operatorToString(op);
+        }
         return operatorToString(op) + expr->to_string();
+    }
+
+    UnaryOperator *copy() override {
+        return new UnaryOperator(op, std::shared_ptr<Expression>(expr->copy()), suffix);
     }
 };
 
@@ -337,9 +262,11 @@ struct BinaryOperator: virtual Operator {
     enum Operation {
         PLUS, MINUS,
         MULTIPLY, DIVIDE,
-        EQUALS, NOT_EQUALS,
+        IS_EQUAL, NOT_EQUALS,
         LESS, MORE, LESS_EQUALS, MORE_EQUALS,
-        AND, OR
+        AND, OR,
+        EQUALS, PLUS_EQUALS, MINUS_EQUALS, MULTIPLY_EQUALS, DIVIDE_EQUALS,
+        INDEXING, POINT
     };
 
     static Operation parseOperation(std::string& opString) {
@@ -352,7 +279,7 @@ struct BinaryOperator: virtual Operator {
         } else if (opString == "/") {
             return DIVIDE;
         } else if (opString == "==") {
-            return EQUALS;
+            return IS_EQUAL;
         } else if (opString == "!=") {
             return NOT_EQUALS;
         } else if (opString == "<") {
@@ -367,62 +294,76 @@ struct BinaryOperator: virtual Operator {
             return AND;
         } else if (opString == "||") {
             return OR;
+        } else if (opString == "=") {
+            return EQUALS;
+        } else if (opString == "+=") {
+            return PLUS_EQUALS;
+        } else if (opString == "-=") {
+            return MINUS_EQUALS;
+        } else if (opString == "*=") {
+            return MULTIPLY_EQUALS;
+        } else if (opString == "/=") {
+            return DIVIDE_EQUALS;
+        } else if (opString == ".") {
+            return POINT;
         }
         throw ParsingException("Supplied unsupported operator: '" + opString + "'");
     }
 
     static std::string operatorToString(Operation op) {
-        if (op == PLUS) {
-            return "+";
-        } else if (op == MINUS) {
-            return "-";
-        } else if (op == MULTIPLY) {
-            return "*";
-        } else if (op == DIVIDE) {
-            return "/";
-        } else if (op == EQUALS) {
-            return "==";
-        } else if (op == NOT_EQUALS) {
-            return "!=";
-        } else if (op == LESS) {
-            return "<";
-        } else if (op == MORE) {
-            return ">";
-        } else if (op == LESS_EQUALS) {
-            return "<=";
-        } else if (op == MORE_EQUALS) {
-            return ">=";
-        } else if (op == AND) {
-            return "&&";
-        } else if (op == OR) {
-            return "||";
+        switch(op) {
+            case PLUS: return "+";
+            case MINUS: return "-";
+            case MULTIPLY: return "*";
+            case DIVIDE: return "/";
+            case IS_EQUAL: return "==";
+            case NOT_EQUALS: return "!=";
+            case LESS: return "<";
+            case MORE: return ">";
+            case LESS_EQUALS: return "<=";
+            case MORE_EQUALS: return ">=";
+            case AND: return "&&";
+            case OR: return "||";
+            case EQUALS: return "=";
+            case PLUS_EQUALS: return "+=";
+            case MINUS_EQUALS: return "-=";
+            case MULTIPLY_EQUALS: return "*=";
+            case DIVIDE_EQUALS: return "/=";
+            case POINT: return ".";
+            default: return "";
         }
-        return "";
     }
 
-    Expression *left;
-    Expression *right;
+    std::shared_ptr<Expression> left;
+    std::shared_ptr<Expression> right;
     Operation op;
 
-    BinaryOperator() = default;
-    BinaryOperator(Operation op, Expression *left, Expression *right): op(op), left(left), right(right) {}
-    BinaryOperator(std::string opString, Expression *left, Expression *right): left(left), right(right) {
+    BinaryOperator() = delete;
+    BinaryOperator(Operation op, std::shared_ptr<Expression> left, std::shared_ptr<Expression> right):
+            op(op), left(std::move(left)), right(std::move(right)) {}
+    BinaryOperator(std::string opString, std::shared_ptr<Expression> left, std::shared_ptr<Expression> right):
+            left(std::move(left)), right(std::move(right)) {
         op = parseOperation(opString);
     }
 
     int getOperatorPrecedence() override {
-        if (op == MULTIPLY || op == DIVIDE) {
+        if (op == INDEXING || op == POINT) {
+            return 2;
+        } if (op == MULTIPLY || op == DIVIDE) {
             return 5;
         } else if (op == PLUS || op == MINUS) {
             return 6;
         } else if (op == LESS || op == LESS_EQUALS || op == MORE || op == MORE_EQUALS) {
             return 9;
-        } else if (op == EQUALS || op == NOT_EQUALS) {
+        } else if (op == IS_EQUAL || op == NOT_EQUALS) {
             return 10;
         } else if (op == AND) {
             return 14;
         } else if (op == OR) {
             return 15;
+        } else if (op == EQUALS || op == PLUS_EQUALS || op == MINUS_EQUALS ||
+                   op == MULTIPLY_EQUALS || op == DIVIDE_EQUALS) {
+            return 16;
         }
         return 100;
     }
@@ -432,135 +373,156 @@ struct BinaryOperator: virtual Operator {
     }
 
     std::string to_string() override {
-        std::string result;
-        BinaryOperator *leftOp = dynamic_cast<BinaryOperator *>(left);
+        std::ostringstream result;
+        if (op == INDEXING) {
+            result << left->to_string() << '[' << right->to_string() << ']';
+            return result.str();
+        } else if (op == POINT) {
+            result << left->to_string() << '.';
+            if (right->getType() == CALL) {
+                result << std::dynamic_pointer_cast<Call>(right)->to_string(true);
+            } else {
+                result << right->to_string();
+            }
+            return result.str();
+        }
+
+        auto *leftOp = dynamic_cast<BinaryOperator *>(left.get());
         if (leftOp != nullptr && comparePrecedence(this, leftOp) < 0) {
-            result += '(' + leftOp->to_string() + ')';
+            result << '(' + leftOp->to_string() + ')';
         } else {
-            result += left->to_string();
+            result << left->to_string();
         }
-        result += ' ' + operatorToString(op) + ' ';
-        BinaryOperator *rightOp = dynamic_cast<BinaryOperator *>(right);
+        result << ' ' + operatorToString(op) + ' ';
+        auto *rightOp = dynamic_cast<BinaryOperator *>(right.get());
         if (rightOp != nullptr && comparePrecedence(this, rightOp) < 0) {
-            result += '(' + rightOp->to_string() + ')';
+            result << '(' + rightOp->to_string() + ')';
         } else {
-            result += right->to_string();
+            result << right->to_string();
         }
-        return result;
+        return result.str();
+    }
+
+    BinaryOperator *copy() override {
+        return new BinaryOperator(op, std::shared_ptr<Expression>(left->copy()), std::shared_ptr<Expression>(right->copy()));
     }
 };
 
 struct Statement: virtual SyntaxTreeNode {
     enum StatementType {
-        ASSIGNMENT,
+        EXPRESSION,
         BLOCK,
         IF,
         WHILE_LOOP,
         FOR_LOOP,
         BREAK,
         RETURN,
+        COMMENT,
+        INCLUDE,
+        FUNCTION,
+        FUNCTION_DECLARATION,
         OTHER,
     };
 
     virtual StatementType getType() = 0;
-};
 
-struct AssignmentStatement: virtual Statement {
-    enum AssignmentOperator {
-        EQUALS,
-        PLUS_EQUALS,
-        MINUS_EQUALS,
-        MULTIPLY_EQUALS,
-        DIVIDE_EQUALS,
-        OTHER
+    virtual bool isFileStatement() {
+        return false;
     };
 
-    static AssignmentOperator parseOperation(std::string op) {
-        if (op == "=") {
-            return EQUALS;
-        } else if (op == "+=") {
-            return PLUS_EQUALS;
-        } else if (op == "-=") {
-            return MINUS_EQUALS;
-        } else if (op == "*=") {
-            return MULTIPLY_EQUALS;
-        } else if (op == "/=") {
-            return DIVIDE_EQUALS;
-        } else {
-            throw ParsingException("Supplied unsupported assignment operator: '" + op + "'");
-        }
+    virtual bool isFunctionStatement() {
+        return false;
+    };
+
+    Statement *copy() override = 0;
+};
+
+struct BreakStatement: virtual Statement {
+    StatementType getType() override {
+        return BREAK;
     }
 
-    static std::string operatorToString(AssignmentOperator op) {
-        if (op == EQUALS) {
-            return "=";
-        } else if (op == PLUS_EQUALS) {
-            return "+=";
-        } else if (op == MINUS_EQUALS) {
-            return "-=";
-        } else if (op == MULTIPLY_EQUALS) {
-            return "*=";
-        } else if (op == DIVIDE_EQUALS) {
-            return "/=";
-        }
-        return "";
+    bool isFunctionStatement() override {
+        return true;
     }
 
-    Expression* var = nullptr;
-    AssignmentOperator op = EQUALS;
-    Expression* expr = nullptr;
-
-    virtual StatementType getType() override {
-        return ASSIGNMENT;
+    std::string to_string() override {
+        return "break;";
     }
 
-    virtual std::string to_string() {
-        std::string result;
-        if (var != nullptr) {
-            result += var->to_string();
-        }
-        std::string opString = operatorToString(op);
-        if (!opString.empty()) {
-            if (!result.empty()) result += ' ';
-            result += opString;
-        }
-        if (expr != nullptr) {
-            if (!result.empty()) result += ' ';
-            result += expr->to_string();
-        }
-        result += ';';
-        return result;
+    Statement *copy() override {
+        return new BreakStatement();
+    }
+};
+
+struct ExpressionStatement: virtual Statement {
+    std::shared_ptr<Expression> expr;
+
+    ExpressionStatement() = delete;
+    explicit ExpressionStatement(std::shared_ptr<Expression> expr): expr(std::move(expr)) {}
+
+    StatementType getType() override {
+        return EXPRESSION;
+    }
+
+    bool isFunctionStatement() override {
+        return true;
+    }
+
+    bool isFileStatement() override {
+        return true;
+    }
+
+    std::string to_string() override {
+        return expr->to_string() + ';';
+    }
+
+    ExpressionStatement *copy() override {
+        return new ExpressionStatement(std::shared_ptr<Expression>(expr->copy()));
     }
 };
 
 struct ReturnStatement: virtual Statement {
-    Expression *expr = nullptr;
+    std::shared_ptr<Expression> expr;
 
-    ReturnStatement() = default;
-    explicit ReturnStatement(Expression *expr): expr(expr){}
+    ReturnStatement() = delete;
+    explicit ReturnStatement(std::shared_ptr<Expression> expr): expr(std::move(expr)){}
 
     StatementType getType() override {
         return RETURN;
     }
 
+    bool isFunctionStatement() override {
+        return true;
+    }
+
     std::string to_string() override {
         return "return " + expr->to_string() + ';';
+    }
+
+    ReturnStatement *copy() override {
+        return new ReturnStatement(std::shared_ptr<Expression>(expr->copy()));
     }
 };
 
 struct BlockStatement: virtual Statement {
-    std::vector<Statement *> statements;
+    std::vector<std::shared_ptr<Statement>> statements;
 
-    BlockStatement() = default;
+    BlockStatement() = delete;
+    explicit BlockStatement(std::vector<std::shared_ptr<Statement>> statements): statements(std::move(statements)) {}
 
     StatementType getType() override {
         return BLOCK;
     }
 
+    bool isFunctionStatement() override {
+        return true;
+    }
+
     std::string to_string() override {
         std::ostringstream result;
         result << "{\n";
-        for (Statement *statement: statements) {
+        for (auto &statement: statements) {
             std::string string = statement->to_string();
             indent(string);
             result << string << "\n";
@@ -568,23 +530,42 @@ struct BlockStatement: virtual Statement {
         result << "}";
         return result.str();
     }
+
+    BlockStatement *copy() override {
+        std::vector<std::shared_ptr<Statement>> copyStatements;
+        for (auto &statement: statements) {
+            copyStatements.push_back(std::shared_ptr<Statement>(statement->copy()));
+        }
+        return new BlockStatement(copyStatements);
+    }
 };
 
 struct ConditionalStatement: virtual Statement {
     bool repeat = false;
-    Expression *condition;
-    Statement *statement;
-    Statement *elseStatement = nullptr;
+    std::shared_ptr<Expression> condition;
+    std::shared_ptr<Statement> statement;
+    std::shared_ptr<Statement> elseStatement;
 
-    ConditionalStatement() = default;
-    ConditionalStatement(bool repeat): repeat(repeat) {};
-    ConditionalStatement(bool repeat, Expression *condition): repeat(repeat), condition(condition){};
+    ConditionalStatement() = delete;
+    ConditionalStatement(bool repeat, std::shared_ptr<Expression> condition, std::shared_ptr<Statement> statement):
+            repeat(repeat), condition(std::move(condition)), statement(std::move(statement)) {};
+    ConditionalStatement(bool repeat, std::shared_ptr<Expression> condition,
+                         std::shared_ptr<Statement> statement, std::shared_ptr<Statement> elseStatement):
+            repeat(repeat), condition(std::move(condition)), statement(std::move(statement)), elseStatement(std::move(elseStatement)) {
+        if (repeat && elseStatement != nullptr) {
+            throw ParsingException("Else statement is not available for while loop");
+        }
+    };
 
-    virtual StatementType getType() override {
+    StatementType getType() override {
         return repeat ? WHILE_LOOP : IF;
     }
 
-    virtual std::string to_string() override {
+    bool isFunctionStatement() override {
+        return true;
+    }
+
+    std::string to_string() override {
         std::ostringstream result;
         result << (repeat ? "while" : "if") << " (" << condition->to_string() << ") ";
         result << statement->to_string();
@@ -593,74 +574,197 @@ struct ConditionalStatement: virtual Statement {
         }
         return result.str();
     }
+
+    ConditionalStatement *copy() override {
+        return new ConditionalStatement(repeat, std::shared_ptr<Expression>(condition->copy()),
+            std::shared_ptr<Statement>(statement->copy()),
+            elseStatement == nullptr ? nullptr : std::shared_ptr<Statement>(elseStatement->copy()));
+    }
 };
 
 struct ForLoop: virtual Statement {
-    Statement *definition;
-    Expression *condition;
-    Expression *expr;
-    Statement *statement;
+    std::shared_ptr<Statement> definition;
+    std::shared_ptr<Expression> condition;
+    std::shared_ptr<Expression> expr;
+    std::shared_ptr<Statement> statement;
 
-    ForLoop() = default;
-    ForLoop(Statement *definition, Expression *condition, Expression *expr):
-        definition(definition), condition(condition), expr(expr) {};
+    ForLoop() = delete;
+    ForLoop(std::shared_ptr<Statement> definition, std::shared_ptr<Expression> condition,
+                std::shared_ptr<Expression> expr, std::shared_ptr<Statement> statement):
+            definition(std::move(definition)), condition(std::move(condition)), expr(std::move(expr)), statement(std::move(statement)) {};
 
-    virtual StatementType getType() override {
+    StatementType getType() override {
         return FOR_LOOP;
     }
 
-    virtual std::string to_string() override {
+    bool isFunctionStatement() override {
+        return true;
+    }
+
+    std::string to_string() override {
         std::ostringstream result;
-        result << "for (" << definition->to_string();
+        result << "for (" << definition->to_string() << " ";
         result << condition->to_string() << "; " << expr->to_string() << ") ";
         result << statement->to_string();
         return result.str();
     }
+
+    ForLoop *copy() override {
+        return new ForLoop(std::shared_ptr<Statement>(definition->copy()),
+                std::shared_ptr<Expression>(condition->copy()),
+                std::shared_ptr<Expression>(expr->copy()),
+                std::shared_ptr<Statement>(statement->copy()));
+    }
 };
 
-struct Function: virtual FileStatement {
-    FunctionDeclaration *declaration;
-    BlockStatement *block;
-    Context context;
+struct Comment: virtual Statement {
+    std::string commentText;
+    bool multiLine = false;
 
-    Function() = default;
-    Function(FunctionDeclaration *declaration): declaration(declaration) {};
+    Comment() = delete;
+    explicit Comment(std::string commentText, bool multiLine=false):
+            commentText(std::move(commentText)), multiLine(multiLine) {};
 
-    virtual FileStatementType getType() override {
+    StatementType getType() override {
+        return COMMENT;
+    }
+
+    bool isFunctionStatement() override {
+        return true;
+    }
+
+    bool isFileStatement() override {
+        return true;
+    }
+
+    std::string to_string() override {
+        if (multiLine) {
+            return "/*\n" + commentText + "\n*/";
+        } else {
+            return "// " + commentText;
+        }
+    }
+
+    Comment *copy() override {
+        return new Comment(commentText, multiLine);
+    }
+};
+
+struct Include: virtual Statement {
+    std::string name;
+    bool arrowInclude;
+
+    Include() = delete;
+    explicit Include(std::string name, bool arrowInclude=false): name(std::move(name)), arrowInclude(arrowInclude) {};
+
+    StatementType getType() override {
+        return INCLUDE;
+    }
+
+    std::string to_string() override {
+        return std::string("#include ") + (arrowInclude ? '<' : '\"') + name + (arrowInclude ? '>' : '\"');
+    }
+
+    Include *copy() override {
+        return new Include(name, arrowInclude);
+    }
+};
+
+struct FunctionDeclaration: virtual Statement {
+    std::string name;
+    Type returnType;
+    std::vector<std::shared_ptr<Variable>> params;
+
+    FunctionDeclaration() = delete;
+    FunctionDeclaration(std::string name, Type returnType):
+            name(std::move(name)), returnType(std::move(returnType)) {}
+    FunctionDeclaration(std::string name, Type returnType, std::vector<std::shared_ptr<Variable>> params):
+            name(std::move(name)), returnType(std::move(returnType)), params(std::move(params)) {}
+
+    FunctionSignature getSignature() {
+        std::vector<Type> paramTypes;
+        for (auto &param: params) {
+            paramTypes.push_back(param->type);
+        }
+        return {name, paramTypes};
+    }
+
+    StatementType getType() override {
+        return FUNCTION_DECLARATION;
+    }
+
+    bool isFileStatement() override {
+        return true;
+    }
+
+    std::string to_string(bool semicolon) {
+        std::ostringstream result;
+        result << returnType.to_string() << ' ' << name << '(';
+        for (int i = 0; i < params.size(); ++i) {
+            if (i != 0) result << ", ";
+            result << params[i]->to_string();
+        }
+        result << ")";
+        if (semicolon) result << ";";
+        return result.str();
+    }
+
+    std::string to_string() override {
+        return to_string(true);
+    }
+
+    FunctionDeclaration *copy() override {
+        std::vector<std::shared_ptr<Variable>> paramsCopy;
+        for (auto &param: params) {
+            paramsCopy.push_back(std::shared_ptr<Variable>(param->copy()));
+        }
+        return new FunctionDeclaration(name, returnType, paramsCopy);
+    }
+};
+
+struct Function: virtual Statement {
+    std::shared_ptr<FunctionDeclaration> declaration;
+    std::shared_ptr<BlockStatement> block;
+    std::shared_ptr<Context> context;
+
+    explicit Function(std::shared_ptr<Context> context): context(std::move(context)) {}
+    Function(std::shared_ptr<Context> context, std::shared_ptr<FunctionDeclaration> declaration, std::shared_ptr<BlockStatement> block):
+        context(std::move(context)), declaration(std::move(declaration)), block(std::move(block)) {};
+
+    StatementType getType() override {
         return FUNCTION;
     }
 
-    virtual std::string to_string() {
+    bool isFileStatement() override {
+        return true;
+    }
+
+    std::string to_string() override {
         std::ostringstream result;
         result << declaration->to_string(false) << " ";
         result << block->to_string();
         return result.str();
     }
-};
 
-struct Include: virtual FileStatement {
-    std::string name;
-    bool useArrows;
-
-    Include() = default;
-    Include(std::string name): name(name), useArrows(false){};
-    Include(std::string name, bool useArrows): name(name), useArrows(useArrows){};
-
-    virtual FileStatementType getType() override {
-        return INCLUDE;
-    }
-
-    virtual std::string to_string() override {
-        return std::string("#include ") + (useArrows ? '<' : '\"') + name + (useArrows ? '>' : '\"');
+    Function *copy() override {
+        std::shared_ptr<Context> contextCopy = std::make_shared<Context>(*context);
+        return new Function(contextCopy,
+             std::shared_ptr<FunctionDeclaration>(declaration->copy()),
+             std::shared_ptr<BlockStatement>(block->copy()));
     }
 };
 
 struct FileNode: virtual SyntaxTreeNode {
     std::string name;
-    std::vector<FileStatement *> statements;
-    Context context;
+    std::vector<std::shared_ptr<Statement>> statements;
+    std::shared_ptr<Context> context;
 
-    virtual std::string to_string() {
+    FileNode() = delete;
+    FileNode(std::shared_ptr<Context> context, std::string name): context(std::move(context)), name(std::move(name)) {}
+    FileNode(std::shared_ptr<Context> context, std::string name, std::vector<std::shared_ptr<Statement>> statements):
+            context(std::move(context)), name(std::move(name)), statements(std::move(statements)) {}
+
+    std::string to_string() override {
         std::string result;
         for (int i = 0; i < statements.size(); ++i) {
             if (i != 0) result += "\n";
@@ -668,6 +772,15 @@ struct FileNode: virtual SyntaxTreeNode {
             result += "\n";
         }
         return result;
+    }
+
+    FileNode *copy() override {
+        std::vector<std::shared_ptr<Statement>> statementsCopy;
+        for (auto &statement: statements) {
+            statementsCopy.push_back(std::shared_ptr<Statement>(statement->copy()));
+        }
+        std::shared_ptr<Context> contextCopy = std::make_shared<Context>(*context);
+        return new FileNode(contextCopy, name, statementsCopy);
     }
 };
 

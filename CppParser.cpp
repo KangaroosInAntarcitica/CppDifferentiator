@@ -61,12 +61,12 @@ bool FileReader::isWhitespace(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\000';
 }
 
-bool FileReader::isUnaryOperator(char c) {
-    return c == '+' || c == '-';
+bool FileReader::isIdentifierStart(char c) {
+    return isLowChar(c) || isUpperChar(c) || c == UNDERSCORE;
 }
 
-bool FileReader::isOperator(char c) {
-    return c == '+' || c == '-' || c == '*' || c == '/';
+bool FileReader::isIdentifierMid(char c) {
+    return isLowChar(c) || isUpperChar(c) || c == isNumber(c) || c == UNDERSCORE;
 }
 
 void FileReader::verifyNextCharIs(char c, bool skipSpace) {
@@ -79,261 +79,24 @@ void FileReader::verifyNextCharIs(char c, bool skipSpace) {
     }
 }
 
-Expression* FileReader::parseNumber() {
+std::shared_ptr<Expression> FileReader::parseNumber() {
     int start = charN;
-    while (isNumber(nextChar) || nextChar == POINT) {
+    bool wasPointPresent = false;
+    while (isNumber(nextChar)) {
         step();
-    }
-    return new Number(line.substr(start, charN - start));
-}
-
-Expression* FileReader::parseExpression(Context& context) {
-    Expression* left = nullptr;
-    skipWhitespace();
-
-    if (nextChar == OPEN_ROUND) {
-        step();
-        auto* leftOperator = new UnaryOperator();
-        leftOperator->expr = parseExpression(context);
-        leftOperator->op = UnaryOperator::Operation::BRACES;
-        left = leftOperator;
-        verifyNextCharIs(CLOSE_ROUND);
-        skipWhitespace();
-    } else if (isLowChar(nextChar) || isUpperChar(nextChar) || nextChar == UNDERSCORE) {
-        std::string name = parseIdentifier(true);
-        if (context.isVariablePresent(name)) {
-            left = context.definedVariables[name];
-        } else if (context.isFunctionPresent(name)) {
-            left = parseFunctionCall(context, context.getFunction(name));
-        } else {
-            throw ParsingException("Identifier '" + name + "' was not defined yet to be used");
-        }
-        skipWhitespace();
-    } else if (isNumber(nextChar)) {
-        left = parseNumber();
-        skipWhitespace();
-    }
-
-    if (nextChar == CLOSE_ROUND || nextChar == SEMI_COLON || nextChar == COMMA) {
-        if (left == nullptr) {
-            throw ParsingException("Missing expression");
-        }
-        return left;
-    }
-
-    std::string op = parseOperator();
-    skipWhitespace();
-    Expression* right = parseExpression(context);
-    if (left == nullptr) {
-        auto* expression = new UnaryOperator();
-        expression->op = UnaryOperator::parseOperation(op);
-        expression->expr = right;
-        return expression;
-    } else {
-        auto* expression = new BinaryOperator();
-        BinaryOperator::Operation operation = BinaryOperator::parseOperation(op);
-        expression->op = operation;
-        auto* rightExpression = dynamic_cast<BinaryOperator*>(right);
-
-        if (rightExpression == nullptr ||
-                BinaryOperator::comparePrecedence(expression, rightExpression) >= 0) {
-            expression->left = left;
-            expression->right = right;
-            expression->op = operation;
-            return expression;
-        } else {
-            expression->left = left;
-            expression->right = rightExpression->left;
-            expression->op = operation;
-            rightExpression->left = expression;
-            return rightExpression;
-        }
-    }
-}
-
-Expression* FileReader::parseFunctionCall(Context &context, FunctionDeclaration *decl) {
-    auto *call = new FunctionCall();
-    call->declaration = decl;
-
-    verifyNextCharIs(OPEN_ROUND);
-    while (nextChar != CLOSE_ROUND) {
-        if (!call->args.empty()) {
-            verifyNextCharIs(COMMA);
-        }
-        call->args.push_back(parseExpression(context));
-    }
-    verifyNextCharIs(CLOSE_ROUND);
-
-    if (call->args.size() != decl->params.size()) {
-        throw ParsingException("Function definition has " + std::to_string(decl->params.size()) +
-                               " parameters, but call provided " + std::to_string(call->args.size()));
-    }
-    return call;
-}
-
-Statement *FileReader::parseStatement(Context& context) {
-    if (nextChar == OPEN_CURLY) {
-        return parseBlock(context);
-    }
-
-    std::string identifier = parseIdentifier(false, false);
-
-    if (identifier == "if" || identifier == "while") {
-        skipWhitespace();
-        ConditionalStatement *statement = new ConditionalStatement;
-        statement->repeat = identifier == "while";
-        verifyNextCharIs(OPEN_ROUND);
-        statement->condition = parseExpression(context);
-        verifyNextCharIs(CLOSE_ROUND);
-        statement->statement = parseStatement(context);
-
-        if (identifier == "if") {
-            identifier = parseIdentifier(false, false);
-            if (identifier == "else") {
-                skipWhitespace();
-                statement->elseStatement = parseStatement(context);
-            } else {
-                stepBack(identifier.size());
+        if (nextChar == POINT) {
+            wasPointPresent = true;
+            step();
+        } else if (nextChar == 'e') {
+            wasPointPresent = true;
+            step();
+            if (nextChar == '-') {
+                step();
             }
         }
-        return statement;
-    } else if (identifier == "return") {
-        Expression *expression = parseExpression(context);
-        ReturnStatement *statement = new ReturnStatement(expression);
-        verifyNextCharIs(SEMI_COLON);
-        return statement;
-    } else if (identifier == "for") {
-        skipWhitespace();
-        verifyNextCharIs(OPEN_ROUND);
-        Statement *definition = parseStatement(context);
-        Expression *condition = parseExpression(context);
-        verifyNextCharIs(SEMI_COLON);
-        Expression *expression = parseExpression(context);
-        ForLoop *forLoop = new ForLoop(definition, condition, expression);
-        forLoop->statement = parseStatement(context);
-        return forLoop;
-    } else {
-        stepBack(identifier.size());
-        AssignmentStatement* statement = new AssignmentStatement;
-        statement->var = parseVariable(context, false);
-
-        Variable* variable = dynamic_cast<Variable*>(statement->var);
-
-        if (nextChar == SEMI_COLON) {
-            return statement;
-        }
-        std::string op = parseOperator();
-        AssignmentStatement::AssignmentOperator operation = AssignmentStatement::parseOperation(op);
-        skipWhitespace();
-        Expression *expr = parseExpression(context);
-        skipWhitespace();
-
-        verifyNextCharIs(SEMI_COLON);
-        statement->op = operation;
-        statement->expr = expr;
-        return statement;
     }
-}
-
-BlockStatement *FileReader::parseBlock(Context &context) {
-    verifyNextCharIs(OPEN_CURLY);
-    BlockStatement *block = new BlockStatement();
-    while (nextChar != CLOSE_CURLY) {
-        Statement* statement = parseStatement(context);
-        block->statements.push_back(statement);
-    }
-    verifyNextCharIs(CLOSE_CURLY);
-    return block;
-}
-
-Expression* FileReader::parseVariable(Context& context, bool declarationRequired) {
-    std::string type;
-    std::string name;
-    if (!isLowChar(nextChar) && !isUpperChar(nextChar) && nextChar != UNDERSCORE) {
-        throw ParsingException(std::string("Unexpected character '") + nextChar + "' in variable");
-    }
-
-    name = parseIdentifier(true);
     skipWhitespace();
-
-    if (isLowChar(nextChar) || isUpperChar(nextChar) || nextChar == UNDERSCORE) {
-        type = name;
-        name = parseIdentifier();
-        skipWhitespace();
-    }
-
-    if (!type.empty()) {
-        Type variableType = Type(type);
-        auto *variable = new Variable(variableType, name);
-        context.definedVariables[name] = variable;
-        return new VariableDeclaration(variable);
-    } else if (context.isVariablePresent(name)) {
-        if (declarationRequired) {
-            throw ParsingException(std::string("Expected variable declaration, but type missing"));
-        }
-        return context.definedVariables[name];
-    } else {
-        throw ParsingException(std::string("The variable '") + name + "' was not defined in this context");
-    }
-}
-
-FileStatement* FileReader::parseFunction(Context& globalContext) {
-    skipWhitespace();
-    FunctionDeclaration* decl = new FunctionDeclaration;
-    Context funcContext = globalContext;
-
-    decl->returnType = parseType(funcContext);
-    skipWhitespace();
-    decl->name = parseIdentifier();
-    verifyNextCharIs(OPEN_ROUND);
-    skipWhitespace();
-
-    bool firstArgument = true;
-    while (nextChar != CLOSE_ROUND) {
-        if (!firstArgument) {
-            verifyNextCharIs(COMMA);
-            skipWhitespace();
-        }
-        Expression* expression = parseVariable(funcContext, true);
-        VariableDeclaration* declaration = dynamic_cast<VariableDeclaration*>(expression);
-        decl->params.push_back(declaration->var);
-        delete declaration;
-        firstArgument = false;
-    }
-    verifyNextCharIs(CLOSE_ROUND);
-    skipWhitespace();
-
-    if (nextChar == OPEN_CURLY) {
-        Function* function = new Function(decl);
-        function->block = parseBlock(funcContext);
-        function->context = funcContext;
-        return function;
-    } else {
-        verifyNextCharIs(SEMI_COLON);
-
-        return decl;
-    }
-}
-
-Type FileReader::parseType(Context& context) {
-    std::string type = parseIdentifier();
-    if (!context.isTypePresent(type)) {
-        throw ParsingException("Type '" + type + "' is not supported");
-    }
-    return Type(type);
-}
-
-std::string FileReader::parseOperator() {
-    int start = charN;
-
-    while (!isWhitespace(nextChar) && !isLowChar(nextChar) && !isUpperChar(nextChar) && nextChar != UNDERSCORE) {
-        if (nextChar == OPEN_ROUND || nextChar == CLOSE_ROUND) {
-            throw ParsingException(std::string("Unsupported character '") + nextChar + "' for operator");
-        }
-        step();
-    }
-
-    return line.substr(start, charN - start);
+    return std::shared_ptr<Expression>(new Number(line.substr(start, charN - start)));
 }
 
 std::string FileReader::parseIdentifier(bool allowColon, bool skipSpace) {
@@ -351,36 +114,337 @@ std::string FileReader::parseIdentifier(bool allowColon, bool skipSpace) {
         }
         step();
     }
-    int end = charN;
+
+    int endN = charN;
     if (skipSpace) {
         skipWhitespace();
     }
-
-    return line.substr(start, end - start);
+    return line.substr(start, endN - start);
 }
 
-FileStatement *FileReader::parseFileStatement(Context &globalContext) {
+
+Type FileReader::parseType(std::shared_ptr<Context> context, std::string type) {
+    if (type.empty()) {
+        type = parseIdentifier();
+        if (!context->isTypePresent(type)) {
+            throw ParsingException("Type '" + type + "' is not supported");
+        }
+    }
+
+    std::vector<Type> typeParameters;
+    if (nextChar == '<') {
+        verifyNextCharIs('<');
+        bool first = true;
+        while (nextChar != '>') {
+            if (!first) {
+                verifyNextCharIs(',');
+            }
+            typeParameters.push_back(parseType(context));
+        }
+        verifyNextCharIs('>');
+    }
+
+    skipWhitespace();
+    return {type, typeParameters};
+}
+
+std::string FileReader::parseOperator() {
+    int start = charN;
+
+    while (!isIdentifierStart(nextChar) && !isNumber(nextChar) && !isWhitespace(nextChar)) {
+        if (nextChar == OPEN_ROUND || nextChar == CLOSE_ROUND) {
+            throw ParsingException(std::string("Unsupported character '") + nextChar + "' for operator");
+        }
+        step();
+    }
+
+    int endN = charN;
+    skipWhitespace();
+    return line.substr(start, endN - start);
+}
+
+std::shared_ptr<Expression> FileReader::parseExpression
+        (std::shared_ptr<Context> context, bool isFirst, bool missingAllowed, std::shared_ptr<Expression> left) {
+    if (left == nullptr) {
+        if (nextChar == OPEN_ROUND) {
+            verifyNextCharIs(OPEN_ROUND);
+            left = std::make_shared<UnaryOperator>(UnaryOperator::BRACES, parseExpression(context));
+            verifyNextCharIs(CLOSE_ROUND);
+        } else if (isIdentifierStart(nextChar)) {
+            std::string name = parseIdentifier(true);
+
+            if (context->isVariablePresent(name)) {
+                left = context->getVariable(name);
+            } else if (isFirst && context->isTypePresent(name)) {
+                Type type = context->getType(name);
+                std::string varName = parseIdentifier(true);
+                context->addVariable(varName, std::make_shared<Variable>(type, varName));
+                left = std::make_shared<Variable>(type, varName, true);
+            } else if (nextChar == OPEN_ROUND) {
+                left = parseCall(context, name);
+            } else {
+                throw ParsingException("Identifier '" + name + "' was not defined yet to be used");
+            }
+        } else if (isNumber(nextChar)) {
+            left = parseNumber();
+        }
+    }
+
+    if (nextChar == CLOSE_ROUND || nextChar == SEMI_COLON || nextChar == COMMA || nextChar == CLOSE_SQUARE) {
+        if (left == nullptr && !missingAllowed) {
+            throw ParsingException("Missing expression");
+        }
+        return left;
+    }
+
+    std::string op = parseOperator();
+    if (left == nullptr) {
+        std::shared_ptr<Expression> right = parseExpression(context);
+        return std::make_shared<UnaryOperator>(op, right);
+    }
+
+    if (op[0] == POINT) {
+        if (left == nullptr || left->getType() != Expression::VARIABLE) {
+            throw ParsingException("Calling methods is only supported on variables");
+        }
+        std::shared_ptr<Variable> var = std::dynamic_pointer_cast<Variable>(left);
+        std::shared_ptr<Call> call = parseCall(context, "", var);
+        std::shared_ptr<Expression> result = std::make_shared<BinaryOperator>(BinaryOperator::POINT, var, call);
+        if (nextChar == CLOSE_ROUND || nextChar == SEMI_COLON || nextChar == COMMA || nextChar == CLOSE_SQUARE) {
+            return result;
+        }
+        return parseExpression(context, false, false, result);
+    } else if (op[0] == OPEN_SQUARE) {
+        std::shared_ptr<Expression> right = parseExpression(context);
+        verifyNextCharIs(CLOSE_SQUARE);
+        std::shared_ptr<Expression> result = std::make_shared<BinaryOperator>(BinaryOperator::INDEXING, left, right);
+        if (nextChar == CLOSE_ROUND || nextChar == SEMI_COLON || nextChar == COMMA || nextChar == CLOSE_SQUARE) {
+            return result;
+        }
+        return parseExpression(context, false, false, result);
+    }
+
+    if (nextChar == OPEN_ROUND || isIdentifierStart(nextChar) || isNumber(nextChar)) {
+        std::shared_ptr<Expression> right = parseExpression(context);
+        std::shared_ptr<BinaryOperator> result = std::make_shared<BinaryOperator>(op, left, right);
+        if (right->getType() == Expression::BINARY_OPERATOR) {
+            auto *rightOperator = dynamic_cast<BinaryOperator*>(right.get());
+            if (BinaryOperator::comparePrecedence(result.get(), rightOperator) < 0) {
+                result->right = rightOperator->left;
+                rightOperator->left = result;
+                return right;
+            }
+        }
+        return result;
+    } else {
+        std::shared_ptr<Expression> result = std::make_shared<UnaryOperator>(op, left, true);
+        if (nextChar == CLOSE_ROUND || nextChar == SEMI_COLON || nextChar == COMMA || nextChar == CLOSE_SQUARE) {
+            return result;
+        }
+        return parseExpression(context, false, false, result);
+    }
+}
+
+std::shared_ptr<Call> FileReader::parseCall(std::shared_ptr<Context> context, std::string name, std::shared_ptr<Variable> var) {
+    if (name.empty()) {
+        name = parseIdentifier(true);
+    }
+    if (var != nullptr) {
+        name = var->type.name + "::" + name;
+    }
+
+    verifyNextCharIs(OPEN_ROUND);
+    std::vector<std::shared_ptr<Expression>> args;
+    bool first = true;
+    while (nextChar != CLOSE_ROUND) {
+        if (!first) {
+            verifyNextCharIs(COMMA);
+        }
+        first = false;
+        args.push_back(parseExpression(context));
+    }
+    verifyNextCharIs(CLOSE_ROUND);
+
+    std::vector<Type> types;
+    for (auto &arg: args) {
+        types.emplace_back();
+    }
+    FunctionSignature signature(name, types);
+    std::shared_ptr<FunctionSignature> function = context->findFunction(signature);
+    if (function == nullptr) {
+        throw ParsingException(
+                "Couldn't find function with signature matching '" + signature.to_string() + "'");
+    }
+    signature = *function;
+    return std::make_shared<Call>(signature, args);
+}
+
+std::shared_ptr<Statement> FileReader::parseStatement(std::shared_ptr<Context> context, bool functionStatement) {
+    if (nextChar == OPEN_CURLY) {
+        return parseBlock(context);
+    } else if (nextChar == '/') {
+        step();
+        if (nextChar == '/') {
+            verifyNextCharIs('/');
+            int start = charN;
+            while (!end && nextChar != '\n') {
+                step();
+            }
+            std::shared_ptr<Comment> comment = std::make_shared<Comment>(line.substr(start, charN - start));
+            skipWhitespace();
+            return comment;
+        }
+        throw ParsingException(std::string("Unexpected char '") + nextChar + "'");
+    }
+
+    if (isIdentifierStart(nextChar)) {
+        std::string identifier = parseIdentifier(false, false);
+
+        if (identifier == "if" || identifier == "while") {
+            if (!functionStatement) {
+                throw ParsingException("This statement type is not allowed here");
+            }
+            skipWhitespace();
+            bool isWhile = identifier == "while";
+            verifyNextCharIs(OPEN_ROUND);
+            std::shared_ptr<Expression> condition = parseExpression(context);
+            verifyNextCharIs(CLOSE_ROUND);
+            std::shared_ptr<Statement> statement = parseStatement(context);
+
+            std::shared_ptr<Statement> elseStatement;
+            if (identifier == "if") {
+                identifier = parseIdentifier(false, false);
+                if (identifier == "else") {
+                    skipWhitespace();
+                    elseStatement = parseStatement(context);
+                } else {
+                    stepBack(identifier.size());
+                }
+            }
+            return std::make_shared<ConditionalStatement>(isWhile, condition, statement, elseStatement);
+        } else if (identifier == "return") {
+            if (!functionStatement) {
+                throw ParsingException("This statement type is not allowed here");
+            }
+            skipWhitespace();
+            std::shared_ptr<ReturnStatement> returnStatement = std::make_shared<ReturnStatement>(
+                    parseExpression(context));
+            verifyNextCharIs(SEMI_COLON);
+            return returnStatement;
+        } else if (identifier == "for") {
+            if (!functionStatement) {
+                throw ParsingException("This statement type is not allowed here");
+            }
+            skipWhitespace();
+            verifyNextCharIs(OPEN_ROUND);
+            std::shared_ptr<Statement> definition = parseStatement(context);
+            std::shared_ptr<Expression> condition = parseExpression(context, false, true);
+            verifyNextCharIs(SEMI_COLON);
+            std::shared_ptr<Expression> expression = parseExpression(context, false, true);
+            verifyNextCharIs(CLOSE_ROUND);
+            std::shared_ptr<Statement> statement = parseStatement(context);
+            std::shared_ptr<ForLoop> forLoop = std::make_shared<ForLoop>(definition, condition, expression, statement);
+            return forLoop;
+        }
+        stepBack(identifier.size());
+    }
+
+    std::shared_ptr<Expression> expression = parseExpression(context, true);
+    verifyNextCharIs(SEMI_COLON);
+    return std::make_shared<ExpressionStatement>(expression);
+}
+
+std::shared_ptr<BlockStatement> FileReader::parseBlock(std::shared_ptr<Context> context) {
+    verifyNextCharIs(OPEN_CURLY);
+    std::vector<std::shared_ptr<Statement>> statements;
+    while (nextChar != CLOSE_CURLY) {
+        statements.push_back(parseStatement(context));
+    }
+    verifyNextCharIs(CLOSE_CURLY);
+    return std::make_shared<BlockStatement>(statements);
+}
+
+std::shared_ptr<Variable> FileReader::parseVariable(std::shared_ptr<Context> context, bool declarationRequired) {
+    Type type;
+    std::string name;
+    if (!isIdentifierStart(nextChar)) {
+        throw ParsingException(std::string("Unexpected character '") + nextChar + "' in variable");
+    }
+
+    name = parseIdentifier(true);
+    skipWhitespace();
+
+    if (context->isVariablePresent(name)) {
+        if (declarationRequired) {
+            throw ParsingException(std::string("Expected variable declaration, but type missing"));
+        }
+        return context->getVariable(name);
+    } else if (context->isTypePresent(name)) {
+        type = parseType(context, name);
+        name = parseIdentifier();
+        context->addVariable(name, std::make_shared<Variable>(type, name));
+        return std::make_shared<Variable>(type, name, true);
+    } else {
+        throw ParsingException(std::string("The variable '") + name + "' was not defined in this context");
+    }
+}
+
+std::shared_ptr<Statement> FileReader::parseFunction(std::shared_ptr<Context> globalContext) {
+    skipWhitespace();
+    std::shared_ptr<Context> funcContext = std::make_shared<Context>(globalContext);
+
+    Type returnType = parseType(funcContext);
+    skipWhitespace();
+    std::string name = parseIdentifier();
+    verifyNextCharIs(OPEN_ROUND);
+    skipWhitespace();
+
+    std::vector<std::shared_ptr<Variable>> params;
+    bool firstArgument = true;
+    while (nextChar != CLOSE_ROUND) {
+        if (!firstArgument) {
+            verifyNextCharIs(COMMA);
+        }
+        std::shared_ptr<Variable> param = parseVariable(funcContext, true);
+        params.push_back(param);
+        firstArgument = false;
+    }
+    verifyNextCharIs(CLOSE_ROUND);
+
+    std::shared_ptr<FunctionDeclaration> decl = std::make_shared<FunctionDeclaration>(name, returnType, params);
+
+    if (nextChar == OPEN_CURLY) {
+        return std::make_shared<Function>(funcContext, decl, parseBlock(funcContext));
+    } else {
+        verifyNextCharIs(SEMI_COLON);
+        return decl;
+    }
+}
+
+std::shared_ptr<Statement> FileReader::parseFileStatement(std::shared_ptr<Context> context) {
     if (nextChar == '#') {
         step();
         std::string identifier = parseIdentifier();
         if (identifier == "include") {
-            Include *include;
+            std::shared_ptr<Include> include;
             if (nextChar == '<') {
                 step();
                 std::string name = parseIdentifier();
-                include = new Include(name, true);
+                include = std::make_shared<Include>(name, true);
                 if (nextChar != '>') {
                     throw ParsingException(std::string("Include should be closed with '>', but got '") + nextChar + "'");
                 }
                 step();
+                skipWhitespace();
             } else if (nextChar == '\"') {
                 step();
                 std::string name = parseIdentifier();
-                include = new Include(name, false);
+                include = std::make_shared<Include>(name, false);
                 if (nextChar != '\"') {
                     throw ParsingException(std::string("Include should be closed with '\"', but got '") + nextChar + "'");
                 }
                 step();
+                skipWhitespace();
             } else {
                 throw ParsingException(std::string("Include should be enclosed in quotation marks, but got '") + nextChar + "'");
             }
@@ -393,46 +457,35 @@ FileStatement *FileReader::parseFileStatement(Context &globalContext) {
             throw ParsingException("File statement of type '#" + identifier + "' is not supported");
         }
     } else if (nextChar == '/') {
-        verifyNextCharIs('/');
-        verifyNextCharIs('/');
-        while (nextChar != '\n' && !end) {
-            step();
+        step();
+        if (nextChar == '/') {
+            verifyNextCharIs('/');
+            int start = charN;
+            while (!end && nextChar != '\n') {
+                step();
+            }
+            std::shared_ptr<Comment> comment = std::make_shared<Comment>(line.substr(start, charN - start));
+            skipWhitespace();
+            return comment;
         }
-        skipWhitespace();
-        return nullptr;
+        throw ParsingException(std::string("Unexpected char '") + nextChar + "'");
     } else {
-        return parseFunction(globalContext);
+        return parseFunction(std::move(context));
     }
 }
 
-FileNode FileReader::parseFile() {
-    FileNode fileNode;
+std::shared_ptr<FileNode> FileReader::parseFile(std::shared_ptr<Context> globalContext) {
+    std::shared_ptr<Context> context = std::make_shared<Context>(globalContext);
 
-    Type *integer = new Type("int");
-    Type *floating = new Type("float");
-    Type *doubleFloating = new Type("double");
-    fileNode.context.addType(integer);
-    fileNode.context.addType(floating);
-    fileNode.context.addType(doubleFloating);
-
-    fileNode.context.addFunction(new FunctionDeclaration("std::cos", 1));
-    fileNode.context.addFunction(new FunctionDeclaration("std::sin", 1));
-    fileNode.context.addFunction(new FunctionDeclaration("std::pow", 2));
-    fileNode.context.addFunction(new FunctionDeclaration("std::log", 1));
-
-    fileNode.name = filePath;
-
+    std::vector<std::shared_ptr<Statement>> statements;
     try {
         skipWhitespace();
         while (!end) {
-            FileStatement *statement = parseFileStatement(fileNode.context);
-            if (statement != nullptr) {
-                fileNode.statements.push_back(statement);
-            }
-            skipWhitespace();
+            statements.push_back(parseFileStatement(context));
         }
-    } catch (ParsingException e) {
+    } catch (ParsingException& e) {
         throw ParsingException(e.error, filePath, lineN + 1, charN + 1);
     }
-    return fileNode;
+
+    return std::make_shared<FileNode>(context, filePath, statements);
 }

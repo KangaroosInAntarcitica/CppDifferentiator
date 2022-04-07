@@ -15,28 +15,32 @@ private:
 
 public:
     struct DiffContext {
-        std::unordered_map<std::string, Variable *> derivedVariables;
-        std::unordered_map<std::string, Variable *> arguments;
+        std::unordered_map<std::string, std::shared_ptr<Variable>> derivedVariables;
+        std::unordered_map<std::string, std::shared_ptr<Variable>> arguments;
         std::vector<std::string> argumentNames;
-        Context &funcContext;
-        FunctionDiffStorage &functionDiffStorage;
+        std::shared_ptr<Context> funcContext;
+        std::shared_ptr<FunctionDiffStorage> functionDiffStorage;
 
-        DiffContext(Function *function, FunctionDiffStorage &storage);
+        DiffContext(std::shared_ptr<Function> function, std::shared_ptr<FunctionDiffStorage> storage);
     };
 
-    virtual FileNode diff(FileNode &file, FunctionDiffStorage &storage);
-    virtual Function* diff(Function *function, FunctionDiffStorage &storage);
-    virtual FunctionDeclaration* diff(FunctionDeclaration *decl);
-    virtual BlockStatement *diff(BlockStatement *block, DiffContext &context);
-    virtual std::vector<Statement *> diff(Statement *statement, DiffContext &context, bool oneStatementRequired=false);
-    virtual Statement* diff(AssignmentStatement *statement, DiffContext &context, Variable *wrt);
-    virtual Expression* diff(Expression *expression, DiffContext &context, Variable *wrt);
-    virtual Expression* diff(Variable *variable, DiffContext &context, Variable *wrt);
-    virtual Expression* diff(UnaryOperator *oper, DiffContext &context, Variable *wrt);
-    virtual Expression* diff(BinaryOperator *oper, DiffContext &context, Variable *wrt);
-    virtual Expression* diff(ElementaryValue *value, DiffContext &context, Variable *wrt);
-    virtual Expression* diff(FunctionCall *call, DiffContext &context, Variable *wrt);
-    virtual std::string createDerivativeName(Variable *variable, DiffContext &context, Variable *wrt);
+    virtual std::string createDerivativeName(std::shared_ptr<Variable> variable, std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt);
+
+    virtual std::shared_ptr<Expression> diff(std::shared_ptr<Expression> expression, std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt, bool leftEquality=false);
+    virtual std::shared_ptr<Expression> diff(std::shared_ptr<Variable> variable, std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt, bool leftEquality=false);
+    virtual std::shared_ptr<Expression> diff(std::shared_ptr<ElementaryValue> value, std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt);
+    virtual std::shared_ptr<Expression> diff(std::shared_ptr<UnaryOperator> oper, std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt);
+    virtual std::shared_ptr<Expression> diff(std::shared_ptr<BinaryOperator> oper, std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt, bool leftEquality=false);
+    virtual std::shared_ptr<Expression> diff(std::shared_ptr<Call> call, std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt);
+
+    virtual std::vector<std::shared_ptr<Statement>> diff(std::shared_ptr<Statement> statement, std::shared_ptr<DiffContext> context, bool oneStatementRequired=false);
+    virtual std::shared_ptr<BlockStatement> diff(std::shared_ptr<BlockStatement> block, std::shared_ptr<DiffContext> context);
+
+    virtual std::shared_ptr<FunctionDeclaration> diff(std::shared_ptr<FunctionDeclaration> decl);
+    virtual std::shared_ptr<Function> diff(std::shared_ptr<Function> function, std::shared_ptr<FunctionDiffStorage> storage);
+    virtual std::shared_ptr<FileNode> diff(std::shared_ptr<FileNode> file, std::shared_ptr<FunctionDiffStorage> storage);
+
+    static std::shared_ptr<FileNode> takeDiff(std::shared_ptr<FileNode> file, std::shared_ptr<FunctionDiffStorage> storage);
 };
 
 class DiffException : public std::exception

@@ -3,44 +3,31 @@
 
 #include "FunctionDiffStorage.h"
 
-class DefaultFunctionDiffStorage: FunctionDiffStorage {
-    static FunctionDiffStorage *instance;
-
+class DefaultFunctionDiffStorage: public FunctionDiffStorage {
     struct CosDiffCalculator: virtual DiffCalculator {
-        Expression *calculate(FunctionCall *call, Diff &diff, Diff::DiffContext &context, Variable *wrt) override;
+        std::shared_ptr<Expression> calculate(std::shared_ptr<Call> call, Diff &diff, std::shared_ptr<Diff::DiffContext> context, std::shared_ptr<Variable> wrt) override;
     };
 
     struct SinDiffCalculator: virtual DiffCalculator {
-        Expression *calculate(FunctionCall *call, Diff &diff, Diff::DiffContext &context, Variable *wrt) override;
+        std::shared_ptr<Expression> calculate(std::shared_ptr<Call> call, Diff &diff, std::shared_ptr<Diff::DiffContext> context, std::shared_ptr<Variable> wrt) override;
     };
 
     struct PowDiffCalculator: virtual DiffCalculator {
-        Expression *calculate(FunctionCall *call, Diff &diff, Diff::DiffContext &context, Variable *wrt) override;
+        std::shared_ptr<Expression> calculate(std::shared_ptr<Call> call, Diff &diff, std::shared_ptr<Diff::DiffContext> context, std::shared_ptr<Variable> wrt) override;
     };
 
     struct LogDiffCalculator: virtual DiffCalculator {
-        Expression *calculate(FunctionCall *call, Diff &diff, Diff::DiffContext &context, Variable *wrt) override;
+        std::shared_ptr<Expression> calculate(std::shared_ptr<Call> call, Diff &diff, std::shared_ptr<Diff::DiffContext> context,
+                                              std::shared_ptr<Variable> wrt) override;
     };
 
-    DefaultFunctionDiffStorage() {
-        addTypeConversion("int", "float");
-        addTypeConversion("int", "double");
-        addTypeConversion("int", "long");
-        addTypeConversion("long", "double");
-        addTypeConversion("float", "double");
-        addTypeConversion("", "double");
-
-        addDiffCalculator(FunctionSignature("std::cos", "double"), new CosDiffCalculator());
-        addDiffCalculator(FunctionSignature("std::sin", "double"), new SinDiffCalculator());
-        addDiffCalculator(FunctionSignature("std::pow", "double", "double"), new PowDiffCalculator());
-        addDiffCalculator(FunctionSignature("std::log", "double"), new LogDiffCalculator());
-    }
-
 public:
-    static FunctionDiffStorage &singleton() {
-        return *instance;
+    explicit DefaultFunctionDiffStorage(std::shared_ptr<Context> context): FunctionDiffStorage(std::move(context)) {
+        addDiffCalculator(FunctionSignature("std::cos", Type()), new CosDiffCalculator());
+        addDiffCalculator(FunctionSignature("std::sin", Type()), new SinDiffCalculator());
+        addDiffCalculator(FunctionSignature("std::pow", Type(), Type()), new PowDiffCalculator());
+        addDiffCalculator(FunctionSignature("std::log", Type()), new LogDiffCalculator());
     }
 };
-
 
 #endif //FINAL_PROJECT_DEFAULTFUNCTIONDIFFSTORAGE_H
