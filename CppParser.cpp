@@ -79,7 +79,7 @@ void FileReader::verifyNextCharIs(char c, bool skipSpace) {
     }
 }
 
-std::shared_ptr<Expression> FileReader::parseNumber() {
+std::shared_ptr<Number> FileReader::parseNumber() {
     int start = charN;
     bool wasPointPresent = false;
     while (isNumber(nextChar)) {
@@ -96,7 +96,7 @@ std::shared_ptr<Expression> FileReader::parseNumber() {
         }
     }
     skipWhitespace();
-    return std::shared_ptr<Expression>(new Number(line.substr(start, charN - start)));
+    return std::make_shared<Number>(line.substr(start, charN - start));
 }
 
 std::string FileReader::parseIdentifier(bool allowColon, bool skipSpace) {
@@ -125,7 +125,11 @@ std::string FileReader::parseIdentifier(bool allowColon, bool skipSpace) {
 
 Type FileReader::parseType(std::shared_ptr<Context> context, std::string type) {
     if (type.empty()) {
-        type = parseIdentifier();
+        if (isNumber(nextChar)) {
+            return Type(parseNumber()->to_string());
+        }
+
+        type = parseIdentifier(true);
         if (!context->isTypePresent(type)) {
             throw ParsingException("Type '" + type + "' is not supported");
         }
@@ -139,6 +143,7 @@ Type FileReader::parseType(std::shared_ptr<Context> context, std::string type) {
             if (!first) {
                 verifyNextCharIs(',');
             }
+            first = false;
             typeParameters.push_back(parseType(context));
         }
         verifyNextCharIs('>');
@@ -176,10 +181,15 @@ std::shared_ptr<Expression> FileReader::parseExpression
             if (context->isVariablePresent(name)) {
                 left = context->getVariable(name);
             } else if (isFirst && context->isTypePresent(name)) {
-                Type type = context->getType(name);
+                Type type = parseType(context, name);
+
                 std::string varName = parseIdentifier(true);
+                std::shared_ptr<Call> call;
+                if (nextChar == OPEN_ROUND) {
+                    call = parseCall(context, type.name);
+                }
                 context->addVariable(varName, std::make_shared<Variable>(type, varName));
-                left = std::make_shared<Variable>(type, varName, true);
+                left = std::make_shared<Variable>(type, varName, true, call);
             } else if (nextChar == OPEN_ROUND) {
                 left = parseCall(context, name);
             } else {
@@ -427,24 +437,18 @@ std::shared_ptr<Statement> FileReader::parseFileStatement(std::shared_ptr<Contex
         std::string identifier = parseIdentifier();
         if (identifier == "include") {
             std::shared_ptr<Include> include;
-            if (nextChar == '<') {
+            if (nextChar == '<' || nextChar == '\"') {
+                char open = nextChar;
+                char close = nextChar == '<' ? '>' : '\"';
                 step();
-                std::string name = parseIdentifier();
-                include = std::make_shared<Include>(name, true);
-                if (nextChar != '>') {
-                    throw ParsingException(std::string("Include should be closed with '>', but got '") + nextChar + "'");
+
+                int start = charN;
+                while (nextChar != close && nextChar != '\n') {
+                    step();
                 }
-                step();
-                skipWhitespace();
-            } else if (nextChar == '\"') {
-                step();
-                std::string name = parseIdentifier();
-                include = std::make_shared<Include>(name, false);
-                if (nextChar != '\"') {
-                    throw ParsingException(std::string("Include should be closed with '\"', but got '") + nextChar + "'");
-                }
-                step();
-                skipWhitespace();
+                std::string name = line.substr(start, charN - start);
+                verifyNextCharIs(close);
+                include = std::make_shared<Include>(name, open == '<');
             } else {
                 throw ParsingException(std::string("Include should be enclosed in quotation marks, but got '") + nextChar + "'");
             }

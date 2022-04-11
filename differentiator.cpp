@@ -11,16 +11,22 @@ public:
         Type floating("float");
         Type doubleFloating("double");
         Type vector("std::vector");
+        Type array("std::array");
         addType(integer.name, integer);
         addType(floating.name, floating);
         addType(doubleFloating.name, doubleFloating);
         addType(vector.name, vector);
+        addType(array.name, array);
 
         addFunction(FunctionSignature("std::cos", Type()));
         addFunction(FunctionSignature("std::sin", Type()));
         addFunction(FunctionSignature("std::pow", Type(), Type()));
+        addFunction(FunctionSignature("std::exp", Type()));
         addFunction(FunctionSignature("std::log", Type()));
+        addFunction(FunctionSignature("std::vector", Type(), Type()));
         addFunction(FunctionSignature("std::vector::size"));
+        addFunction(FunctionSignature("std::array", Type()));
+        addFunction(FunctionSignature("std::abs", Type()));
     }
 };
 

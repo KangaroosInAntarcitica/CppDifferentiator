@@ -7,7 +7,7 @@
 class FunctionDiffStorage;
 
 class Diff {
-private:
+protected:
     static const std::string DERIVATIVE_WRT_PREFIX;
     static const std::string DERIVATIVE_VAR_PREFIX;
     static const std::string DERIVATIVE_FILE_PREFIX;
@@ -18,6 +18,7 @@ public:
         std::unordered_map<std::string, std::shared_ptr<Variable>> derivedVariables;
         std::unordered_map<std::string, std::shared_ptr<Variable>> arguments;
         std::vector<std::string> argumentNames;
+        std::unordered_map<std::string, int> argumentIndexed;
         std::shared_ptr<Context> funcContext;
         std::shared_ptr<FunctionDiffStorage> functionDiffStorage;
 
@@ -26,8 +27,10 @@ public:
 
     virtual std::string createDerivativeName(std::shared_ptr<Variable> variable, std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt);
 
-    virtual std::shared_ptr<Expression> diff(std::shared_ptr<Expression> expression, std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt, bool leftEquality=false);
-    virtual std::shared_ptr<Expression> diff(std::shared_ptr<Variable> variable, std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt, bool leftEquality=false);
+    virtual std::shared_ptr<Expression> diff(std::shared_ptr<Expression> expression, std::shared_ptr<DiffContext> context,
+                                             std::shared_ptr<Variable> wrt, bool leftEquality=false, bool topStatement=false);
+    virtual std::shared_ptr<Expression> diff(std::shared_ptr<Variable> variable, std::shared_ptr<DiffContext> context,
+                                             std::shared_ptr<Variable> wrt, bool leftEquality=false, bool topStatement=false);
     virtual std::shared_ptr<Expression> diff(std::shared_ptr<ElementaryValue> value, std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt);
     virtual std::shared_ptr<Expression> diff(std::shared_ptr<UnaryOperator> oper, std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt);
     virtual std::shared_ptr<Expression> diff(std::shared_ptr<BinaryOperator> oper, std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt, bool leftEquality=false);
@@ -40,6 +43,13 @@ public:
     virtual std::shared_ptr<Function> diff(std::shared_ptr<Function> function, std::shared_ptr<FunctionDiffStorage> storage);
     virtual std::shared_ptr<FileNode> diff(std::shared_ptr<FileNode> file, std::shared_ptr<FunctionDiffStorage> storage);
 
+    virtual std::shared_ptr<Expression> simplify(std::shared_ptr<Expression> expression);
+
+protected:
+    virtual std::vector<std::shared_ptr<Expression>> getIndexesOfIndexedArg(std::shared_ptr<Expression> expression, std::string wrt);
+    void getIndexesOfIndexedArg(std::shared_ptr<Expression> expression, std::string wrt, std::vector<std::shared_ptr<Expression>> &found);
+
+public:
     static std::shared_ptr<FileNode> takeDiff(std::shared_ptr<FileNode> file, std::shared_ptr<FunctionDiffStorage> storage);
 };
 

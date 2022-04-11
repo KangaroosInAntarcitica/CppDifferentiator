@@ -55,23 +55,82 @@ struct Expression: virtual SyntaxTreeNode {
         VARIABLE,
         VARIABLE_DECLARATION,
         CALL,
-        FUNCTION_REFERENCE,
         OTHER
     };
 
     virtual ExpressionType getType() = 0;
 
     Expression *copy() override = 0;
+
+    static std::shared_ptr<Expression> add(std::shared_ptr<Expression> left, std::shared_ptr<Expression> right);
+    static std::shared_ptr<Expression> subtract(std::shared_ptr<Expression> left, std::shared_ptr<Expression> right);
+    static std::shared_ptr<Expression> multiply(std::shared_ptr<Expression> left, std::shared_ptr<Expression> right);
+    static std::shared_ptr<Expression> divide(std::shared_ptr<Expression> left, std::shared_ptr<Expression> right);
+};
+
+struct Call: virtual Expression {
+    FunctionSignature signature;
+    std::vector<std::shared_ptr<Expression>> args;
+
+    explicit Call(FunctionSignature& signature): signature(signature) {};
+    Call(FunctionSignature &signature, std::vector<std::shared_ptr<Expression>> args):
+            signature(signature), args(std::move(args)) {}
+    Call(FunctionSignature &signature, std::shared_ptr<Expression> arg0): signature(signature) {
+        args.push_back(std::move(arg0));
+    }
+    Call(FunctionSignature &signature, std::shared_ptr<Expression> arg0, std::shared_ptr<Expression> arg1):
+            Call(signature, std::move(arg0)) {
+        args.push_back(std::move(arg1));
+    }
+
+    ExpressionType getType() override {
+        return CALL;
+    }
+
+    std::string to_string(bool methodCall, bool constructorCall) {
+        std::ostringstream result;
+        if (methodCall) {
+            size_t i = signature.name.find_last_of(':');
+            if (i == std::string::npos) { i = 0; }
+            else { ++i; }
+            result << signature.name.substr(i);
+        } else if (!constructorCall) {
+            result << signature.name;
+        }
+
+        result << '(';
+        for (int i = 0; i < args.size(); ++i) {
+            if (i != 0) result << ", ";
+            result << args[i]->to_string();
+        }
+        result << ')';
+        return result.str();
+    }
+
+    std::string to_string() override {
+        return to_string(false, false);
+    }
+
+    Call *copy() override {
+        std::vector<std::shared_ptr<Expression>> copyArgs;
+        for (auto &arg: args) {
+            copyArgs.push_back(std::shared_ptr<Expression>(arg->copy()));
+        }
+        return new Call(signature, copyArgs);
+    }
 };
 
 struct Variable: virtual Expression {
     Type type;
     std::string name;
     bool declaration;
+    std::shared_ptr<Call> constructorCall;
 
     Variable() = delete;
     Variable(Type type, std::string name, bool declaration=false):
             type(std::move(type)), name(std::move(name)), declaration(declaration) {};
+    Variable(Type type, std::string name, bool declaration, std::shared_ptr<Call> constructorCall):
+            type(std::move(type)), name(std::move(name)), declaration(declaration), constructorCall(std::move(constructorCall)) {}
 
     ExpressionType getType() override {
         return declaration ? VARIABLE_DECLARATION : VARIABLE;
@@ -79,6 +138,9 @@ struct Variable: virtual Expression {
 
     std::string to_string() override {
         if (declaration) {
+            if (constructorCall != nullptr) {
+                return type.to_string() + " " + name + constructorCall->to_string(false, true);
+            }
             return type.to_string() + " " + name;
         }
         return name;
@@ -110,6 +172,14 @@ struct Number: virtual ElementaryValue {
     Number* copy() override {
         return new Number(value);
     }
+
+    bool isZero() {
+        return value == 0;
+    }
+
+    bool isOne() {
+        return value == 1;
+    }
 };
 
 struct Operator: virtual Expression {
@@ -117,58 +187,6 @@ struct Operator: virtual Expression {
 
     static int comparePrecedence(Operator *op1, Operator *op2) {
         return op1->getOperatorPrecedence() - op2->getOperatorPrecedence();
-    }
-};
-
-struct Call: virtual Expression {
-    FunctionSignature signature;
-    std::vector<std::shared_ptr<Expression>> args;
-
-    explicit Call(FunctionSignature& signature): signature(signature) {};
-    Call(FunctionSignature &signature, std::vector<std::shared_ptr<Expression>> args):
-            signature(signature), args(std::move(args)) {}
-    Call(FunctionSignature &signature, std::shared_ptr<Expression> arg0): signature(signature) {
-        args.push_back(std::move(arg0));
-    }
-    Call(FunctionSignature &signature, std::shared_ptr<Expression> arg0, std::shared_ptr<Expression> arg1):
-            Call(signature, std::move(arg0)) {
-        args.push_back(std::move(arg1));
-    }
-
-    ExpressionType getType() override {
-        return CALL;
-    }
-
-    std::string to_string(bool methodCall) {
-        std::ostringstream result;
-        if (methodCall) {
-            size_t i = signature.name.find_last_of(':');
-            if (i == std::string::npos) { i = 0; }
-            else { ++i; }
-            result << signature.name.substr(i);
-        } else {
-            result << signature.name;
-        }
-
-        result << '(';
-        for (int i = 0; i < args.size(); ++i) {
-            if (i != 0) result << ", ";
-            result << args[i]->to_string();
-        }
-        result << ')';
-        return result.str();
-    }
-
-    std::string to_string() override {
-        return to_string(false);
-    }
-
-    Call *copy() override {
-        std::vector<std::shared_ptr<Expression>> copyArgs;
-        for (auto &arg: args) {
-            copyArgs.push_back(std::shared_ptr<Expression>(arg->copy()));
-        }
-        return new Call(signature, copyArgs);
     }
 };
 
@@ -380,7 +398,7 @@ struct BinaryOperator: virtual Operator {
         } else if (op == POINT) {
             result << left->to_string() << '.';
             if (right->getType() == CALL) {
-                result << std::dynamic_pointer_cast<Call>(right)->to_string(true);
+                result << std::dynamic_pointer_cast<Call>(right)->to_string(true, false);
             } else {
                 result << right->to_string();
             }
@@ -767,7 +785,10 @@ struct FileNode: virtual SyntaxTreeNode {
     std::string to_string() override {
         std::string result;
         for (int i = 0; i < statements.size(); ++i) {
-            if (i != 0) result += "\n";
+            Statement::StatementType type = statements[i]->getType();
+            if (i != 0 && (type == Statement::FUNCTION || type == Statement::FUNCTION_DECLARATION)) {
+                result += "\n";
+            }
             result += statements[i]->to_string();
             result += "\n";
         }

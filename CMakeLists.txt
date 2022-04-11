@@ -4,7 +4,7 @@ project(Final_Project)
 set(CMAKE_CXX_STANDARD 14)
 
 add_executable(differentiator differentiator.cpp CppParser.h SyntaxTreeNode.h CppParser.cpp Context.h Context.cpp
-        Diff.h Diff.cpp FunctionDiffStorage.h DefaultFunctionDiffStorage.h DefaultFunctionDiffStorage.cpp)
+        Diff.h Diff.cpp FunctionDiffStorage.h DefaultFunctionDiffStorage.h DefaultFunctionDiffStorage.cpp SyntaxTreeNode.cpp)
 
 add_custom_command(
     OUTPUT d_function.h

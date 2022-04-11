@@ -49,7 +49,7 @@ public:
     std::string parseIdentifier(bool allowColon=false, bool skipSpace=true);
     std::string parseOperator();
     Type parseType(std::shared_ptr<Context> context, std::string typeName="");
-    std::shared_ptr<Expression> parseNumber();
+    std::shared_ptr<Number> parseNumber();
     std::shared_ptr<Statement> parseStatement(std::shared_ptr<Context> context, bool functionStatement=true);
     std::shared_ptr<BlockStatement> parseBlock(std::shared_ptr<Context> context);
     std::shared_ptr<Expression> parseExpression(std::shared_ptr<Context> context, bool isFirst=false,

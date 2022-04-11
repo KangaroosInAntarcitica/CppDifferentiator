@@ -16,7 +16,21 @@ class DefaultFunctionDiffStorage: public FunctionDiffStorage {
         std::shared_ptr<Expression> calculate(std::shared_ptr<Call> call, Diff &diff, std::shared_ptr<Diff::DiffContext> context, std::shared_ptr<Variable> wrt) override;
     };
 
+    struct ExpDiffCalculator: virtual DiffCalculator {
+        std::shared_ptr<Expression> calculate(std::shared_ptr<Call> call, Diff &diff, std::shared_ptr<Diff::DiffContext> context, std::shared_ptr<Variable> wrt) override;
+    };
+
     struct LogDiffCalculator: virtual DiffCalculator {
+        std::shared_ptr<Expression> calculate(std::shared_ptr<Call> call, Diff &diff, std::shared_ptr<Diff::DiffContext> context,
+                                              std::shared_ptr<Variable> wrt) override;
+    };
+
+    struct VectorConstructorDiffCalculator: virtual DiffCalculator {
+        std::shared_ptr<Expression> calculate(std::shared_ptr<Call> call, Diff &diff, std::shared_ptr<Diff::DiffContext> context,
+                                              std::shared_ptr<Variable> wrt) override;
+    };
+
+    struct AbsDiffCalculator: virtual DiffCalculator {
         std::shared_ptr<Expression> calculate(std::shared_ptr<Call> call, Diff &diff, std::shared_ptr<Diff::DiffContext> context,
                                               std::shared_ptr<Variable> wrt) override;
     };
@@ -26,7 +40,10 @@ public:
         addDiffCalculator(FunctionSignature("std::cos", Type()), new CosDiffCalculator());
         addDiffCalculator(FunctionSignature("std::sin", Type()), new SinDiffCalculator());
         addDiffCalculator(FunctionSignature("std::pow", Type(), Type()), new PowDiffCalculator());
+        addDiffCalculator(FunctionSignature("std::exp", Type()), new ExpDiffCalculator());
         addDiffCalculator(FunctionSignature("std::log", Type()), new LogDiffCalculator());
+        addDiffCalculator(FunctionSignature("std::vector", Type(), Type()), new VectorConstructorDiffCalculator());
+        addDiffCalculator(FunctionSignature("std::abs", Type()), new AbsDiffCalculator());
     }
 };
 

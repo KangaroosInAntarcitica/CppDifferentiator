@@ -12,15 +12,17 @@ std::string Diff::createDerivativeName(std::shared_ptr<Variable> variable, std::
 }
 
 std::shared_ptr<Expression> Diff::diff(std::shared_ptr<Expression> expression, std::shared_ptr<DiffContext> context,
-                                       std::shared_ptr<Variable> wrt, bool leftEquality) {
-    if (leftEquality && expression->getType() != Expression::VARIABLE && expression->getType() != Expression::VARIABLE_DECLARATION) {
+                                       std::shared_ptr<Variable> wrt, bool leftEquality, bool topStatement) {
+    if (leftEquality && expression->getType() != Expression::VARIABLE &&
+            expression->getType() != Expression::VARIABLE_DECLARATION &&
+            expression->getType() != Expression::BINARY_OPERATOR) {
         throw DiffException("Only variables are allowed as assignable types in equalities");
     }
 
     switch(expression->getType()) {
         case Expression::VARIABLE:
         case Expression::VARIABLE_DECLARATION:
-            return diff(std::dynamic_pointer_cast<Variable>(expression), context, wrt, leftEquality);
+            return diff(std::dynamic_pointer_cast<Variable>(expression), context, wrt, leftEquality, topStatement);
         case Expression::UNARY_OPERATOR:
             return diff(std::dynamic_pointer_cast<UnaryOperator>(expression), context, wrt);
         case Expression::BINARY_OPERATOR:
@@ -40,10 +42,10 @@ std::shared_ptr<Expression> Diff::diff(std::shared_ptr<ElementaryValue> value, s
 }
 
 std::shared_ptr<Expression> Diff::diff(std::shared_ptr<Variable> variable, std::shared_ptr<DiffContext> context,
-                                       std::shared_ptr<Variable> wrt, bool leftEquality) {
+                                       std::shared_ptr<Variable> wrt, bool leftEquality, bool topStatement) {
     std::string derName = createDerivativeName(variable, context, wrt);
     if (variable->declaration) {
-        if (!leftEquality) {
+        if (!leftEquality && !topStatement) {
             throw DiffException("Variable declaration is only allowed on the left of equalities");
         }
 
@@ -53,7 +55,11 @@ std::shared_ptr<Expression> Diff::diff(std::shared_ptr<Variable> variable, std::
             return context->funcContext->variables[derName];
         } else {
             context->derivedVariables[derName] = std::make_shared<Variable>(variable->type, derName);
-            return std::make_shared<Variable>(variable->type, derName, true);
+            std::shared_ptr<Call> constructorCall;
+            if (variable->constructorCall != nullptr) {
+                constructorCall = std::dynamic_pointer_cast<Call>(diff(variable->constructorCall, context, wrt));
+            }
+            return std::make_shared<Variable>(variable->type, derName, true, constructorCall);
         }
     }
 
@@ -156,7 +162,8 @@ std::vector<std::shared_ptr<Statement> > Diff::diff(
             std::shared_ptr<Variable> arg = context->arguments[argName];
             std::shared_ptr<ExpressionStatement> expressionStatement =
                     std::dynamic_pointer_cast<ExpressionStatement>(statement);
-            std::shared_ptr<Expression> dExpr = diff(expressionStatement->expr, context, arg);
+            std::shared_ptr<Expression> dExpr = diff(expressionStatement->expr, context, arg, false, true);
+            dExpr = simplify(dExpr);
             if (dExpr != nullptr) {
                 dStatements.push_back(std::make_shared<ExpressionStatement>(dExpr));
             }
@@ -166,9 +173,33 @@ std::vector<std::shared_ptr<Statement> > Diff::diff(
         dStatements.push_back(diff(std::dynamic_pointer_cast<BlockStatement>(statement), context));
     } else if (statement->getType() == Statement::RETURN) {
         std::shared_ptr<ReturnStatement> returnStatement = std::dynamic_pointer_cast<ReturnStatement>(statement);
-        for (std::string &argName: context->argumentNames) {
-            dStatements.push_back(std::make_shared<ReturnStatement>(diff(returnStatement->expr,
-                                                                         context, context->arguments[argName])));
+        if (context->argumentNames.size() == 1) {
+            std::shared_ptr<Expression> expr = diff(returnStatement->expr, context, context->arguments[context->argumentNames[0]]);
+            expr = simplify(expr);
+            dStatements.push_back(std::make_shared<ReturnStatement>(expr));
+        } else {
+            std::shared_ptr<Variable> var = std::dynamic_pointer_cast<Variable>(returnStatement->expr);
+            if (var == nullptr) {
+                throw DiffException("Only variables are allowed as return types for functions with multiple arguments");
+            }
+
+            size_t nArgs = context->argumentNames.size();
+            std::string returnName = DERIVATIVE_VAR_PREFIX + "return";
+            Type returnType = Type("std::array", std::vector<Type>{var->type, Type(std::to_string(nArgs))});
+            std::shared_ptr<Variable> returnVariable = std::make_shared<Variable>(returnType, returnName);
+            context->funcContext->addVariable(returnName, returnVariable);
+            context->derivedVariables[returnName] = returnVariable;
+            dStatements.push_back(std::make_shared<ExpressionStatement>(std::make_shared<Variable>(returnType, returnName, true)));
+
+            for (int i = 0; i < nArgs; ++i) {
+                std::shared_ptr<Expression> left = std::make_shared<BinaryOperator>(BinaryOperator::INDEXING,
+                     returnVariable, std::make_shared<Number>(i));
+                std::shared_ptr<Expression> right = diff(returnStatement->expr, context, context->arguments[context->argumentNames[i]]);
+                right = simplify(right);
+                dStatements.push_back(std::make_shared<ExpressionStatement>(
+                        std::make_shared<BinaryOperator>(BinaryOperator::EQUALS, left, right)));
+            }
+            dStatements.push_back(std::make_shared<ReturnStatement>(returnVariable));
         }
     } else if (statement->getType() == Statement::IF || statement->getType() == Statement::WHILE_LOOP) {
         std::shared_ptr<ConditionalStatement> conditional = std::dynamic_pointer_cast<ConditionalStatement>(statement);
@@ -217,7 +248,11 @@ std::shared_ptr<BlockStatement> Diff::diff(std::shared_ptr<BlockStatement> block
 
 std::shared_ptr<FunctionDeclaration> Diff::diff(std::shared_ptr<FunctionDeclaration> decl) {
     std::string name = DERIVATIVE_FUNCTION_PREFIX + decl->name;
-    return std::make_shared<FunctionDeclaration>(name, decl->returnType, decl->params);
+    Type returnType = decl->returnType;
+    if (decl->params.size() > 1) {
+        returnType = Type("std::array", std::vector<Type>{decl->returnType, Type(std::to_string(decl->params.size()))});
+    }
+    return std::make_shared<FunctionDeclaration>(name, returnType, decl->params);
 }
 
 std::shared_ptr<Function> Diff::diff(std::shared_ptr<Function> function, std::shared_ptr<FunctionDiffStorage> storage) {
@@ -235,8 +270,13 @@ Diff::DiffContext::DiffContext(std::shared_ptr<Function> function, std::shared_p
     funcContext = std::shared_ptr<Context>(function->context->copy());
 
     for (std::shared_ptr<Variable> param: function->declaration->params) {
-        arguments[param->name] = param;
         argumentNames.push_back(param->name);
+        if (param->type.name == "std::vector" || param->type.name == "std::array") {
+            argumentIndexed[param->name] = 1;
+        } else {
+            argumentIndexed[param->name] = 0;
+        }
+        arguments[param->name] = param;
     }
 }
 
@@ -254,6 +294,8 @@ std::shared_ptr<FileNode> Diff::diff(std::shared_ptr<FileNode> file, std::shared
     std::string dName = filePath + DERIVATIVE_FILE_PREFIX + fileName;
 
     std::vector<std::shared_ptr<Statement>> dStatements;
+    dStatements.push_back(std::make_shared<Include>("array", true));
+
     for (std::shared_ptr<Statement> statement: file->statements) {
         switch (statement->getType()) {
             case Statement::FUNCTION:
@@ -263,6 +305,7 @@ std::shared_ptr<FileNode> Diff::diff(std::shared_ptr<FileNode> file, std::shared
                 dStatements.push_back(diff(std::dynamic_pointer_cast<FunctionDeclaration>(statement)));
                 break;
             case Statement::INCLUDE:
+                if (std::dynamic_pointer_cast<Include>(statement)->name == "array") break;
             case Statement::COMMENT:
                 dStatements.push_back(statement);
                 break;
@@ -279,56 +322,111 @@ std::shared_ptr<FileNode> Diff::takeDiff(std::shared_ptr<FileNode> file, std::sh
     return diff->diff(std::move(file), std::move(storage));
 }
 
-/*
-std::shared_ptr<Statement> Diff::diff(std::shared_ptr<ExpressionStatement> statement,
-                                      std::shared_ptr<DiffContext> context, std::shared_ptr<Variable> wrt) {
-    std::shared_ptr<Expression> expr = statement->var;
-    std::shared_ptr<Expression> derivativeExpr;
+std::shared_ptr<Expression> Diff::simplify(std::shared_ptr<Expression> expression) {
+    if (expression->getType() == Expression::UNARY_OPERATOR) {
+        std::shared_ptr<UnaryOperator> op = std::dynamic_pointer_cast<UnaryOperator>(expression);
+        std::shared_ptr<Expression> expr = simplify(op->expr);
 
-    if (expr->getType() == Expression::ExpressionType::VARIABLE_DECLARATION) {
-        std::shared_ptr<auto> decl = std::dynamic_pointer_cast<VariableDeclaration>(expr);
-        std::string derName = createDerivativeName(decl->var, context, wrt);
+        if (op->op == UnaryOperator::PLUS) {
+            return expr;
+        }
 
-        if (context.funcContext.definedVariables.count(derName)) {
-            return nullptr;
-        } else {
-            std::shared_ptr<Variable> variable = std::make_shared<Variable;>
-            variable->name = derName;
-            variable->type = decl->var->type;
-            std::shared_ptr<VariableDeclaration> derivativeDecl = std::make_shared<VariableDeclaration;>
-            derivativeDecl->var = variable;
-            derivativeExpr = derivativeDecl;
-            context.derivedVariables[derName] = variable;
+        return std::make_shared<UnaryOperator>(op->op, expr);
+    } else if (expression->getType() == Expression::BINARY_OPERATOR) {
+        std::shared_ptr<BinaryOperator> op = std::dynamic_pointer_cast<BinaryOperator>(expression);
+        std::shared_ptr<Expression> left = simplify(op->left);
+        std::shared_ptr<Expression> right = simplify(op->right);
+        std::shared_ptr<Number> leftNumber = std::dynamic_pointer_cast<Number>(left);
+        std::shared_ptr<Number> rightNumber = std::dynamic_pointer_cast<Number>(right);
+        bool leftZero = leftNumber != nullptr && leftNumber->isZero();
+        bool rightZero = rightNumber != nullptr && rightNumber->isZero();
+        bool leftOne = leftNumber != nullptr && leftNumber->isOne();
+        bool rightOne = rightNumber != nullptr && rightNumber->isOne();
+
+        if (op->op == BinaryOperator::PLUS || op->op == BinaryOperator::MINUS) {
+            if (leftZero) {
+                return right;
+            } else if (rightZero) {
+                return left;
+            } else if (leftNumber != nullptr && rightNumber != nullptr) {
+                double value = op->op == BinaryOperator::PLUS ? leftNumber->value + rightNumber->value
+                        : leftNumber->value - rightNumber->value;
+                return std::make_shared<Number>(value);
+            }
+        } else if (op->op == BinaryOperator::MULTIPLY) {
+            if (leftZero || rightZero) {
+                return std::make_shared<Number>(0);
+            } else if (leftOne) {
+                return right;
+            } else if (rightOne) {
+                return left;
+            } else if (leftNumber != nullptr && rightNumber != nullptr) {
+                return std::make_shared<Number>(leftNumber->value * rightNumber->value);
+            }
+        } else if(op->op == BinaryOperator::DIVIDE) {
+            if (rightOne) {
+                return left;
+            }
         }
-    } else if (expr->getType() == Expression::ExpressionType::VARIABLE) {
-        std::shared_ptr<Variable> var = std::dynamic_pointer_cast<Variable>(expr);
-        std::string derivativeName = createDerivativeName(var, context, wrt);
-        if (context.derivedVariables.count(derivativeName)) {
-            derivativeExpr = context.derivedVariables[derivativeName];
-        } else if (context.arguments.count(var->name)) {
-            throw DiffException("Reassigning arguments is not allowed, as derivative will be changed");
-        } else {
-            throw DiffException("Derived variable '" + derivativeName + "' not found");
+
+        return std::make_shared<BinaryOperator>(op->op, left, right);
+    } else if (expression->getType() == Expression::VARIABLE_DECLARATION) {
+        std::shared_ptr<Variable> var = std::dynamic_pointer_cast<Variable>(expression);
+
+        if (var->constructorCall) {
+            return std::make_shared<Variable>(var->type, var->name, var->declaration,
+                                              std::dynamic_pointer_cast<Call>(simplify(var->constructorCall)));
         }
-    } else {
-        throw DiffException("Left operand can only be a variable");
+    } else if (expression->getType() == Expression::CALL) {
+        std::shared_ptr<Call> call = std::dynamic_pointer_cast<Call>(expression);
+
+        if (call->args.empty()) {
+            return call;
+        }
+
+        std::vector<std::shared_ptr<Expression>> args;
+        for (std::shared_ptr<Expression> &arg: call->args) {
+            args.push_back(simplify(arg));
+        }
+        return std::make_shared<Call>(call->signature, args);
     }
 
-    std::shared_ptr<auto> derivativeStatement = std::make_shared<AssignmentStatement;>
-    derivativeStatement->var = derivativeExpr;
-
-    switch (statement->op) {
-        case AssignmentStatement::EQUALS:
-        case AssignmentStatement::PLUS_EQUALS:
-        case AssignmentStatement::MINUS_EQUALS:
-            derivativeStatement->expr = diff(statement->expr, context, wrt);
-            derivativeStatement->op = statement->op;
-            break;
-        default:
-            throw DiffException("Assignment statement '" +
-                AssignmentStatement::operatorToString(statement->op) + "' is not supported yet");
-    }
-
-    return derivativeStatement;
+    return expression;
 }
-*/
+
+std::vector<std::shared_ptr<Expression>> Diff::getIndexesOfIndexedArg
+        (std::shared_ptr<Expression> expression, std::string wrt) {
+    std::vector<std::shared_ptr<Expression>> result;
+    getIndexesOfIndexedArg(expression, wrt, result);
+    return result;
+}
+
+void Diff::getIndexesOfIndexedArg
+        (std::shared_ptr<Expression> expr, std::string wrt, std::vector<std::shared_ptr<Expression>> &found) {
+    if (expr->getType() == Expression::BINARY_OPERATOR) {
+        std::shared_ptr<BinaryOperator> op = std::dynamic_pointer_cast<BinaryOperator>(expr);
+
+        if (op->op == BinaryOperator::INDEXING) {
+            if (op->left->getType() == Expression::VARIABLE) {
+                std::shared_ptr<Variable> opVar = std::dynamic_pointer_cast<Variable>(op->left);
+                if (opVar->name == wrt) {
+                    found.push_back(op->right);
+                }
+            }
+            return;
+        }
+
+        getIndexesOfIndexedArg(op->left, wrt, found);
+        getIndexesOfIndexedArg(op->right, wrt, found);
+    } else if (expr->getType() == Expression::UNARY_OPERATOR) {
+        std::shared_ptr<UnaryOperator> op = std::dynamic_pointer_cast<UnaryOperator>(expr);
+        getIndexesOfIndexedArg(op->expr, wrt, found);
+    } else if (expr->getType() == Expression::CALL) {
+        std::shared_ptr<Call> call = std::dynamic_pointer_cast<Call>(expr);
+        for (std::shared_ptr<Expression> &arg: call->args) {
+            getIndexesOfIndexedArg(arg, wrt, found);
+        }
+    }
+}
+
+
